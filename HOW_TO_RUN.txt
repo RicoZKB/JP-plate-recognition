@@ -1,0 +1,219 @@
+================================================================================
+              HOW TO RUN - LICENSE PLATE DETECTION SYSTEM
+================================================================================
+
+📍 LOCATION: /home/jetson/yolo/yolov7/Licence-Plate-Detection-Recognition-Recording
+
+================================================================================
+🚀 QUICK START (Choose one):
+================================================================================
+
+1. EASIEST WAY (Just run):
+
+   cd /home/jetson/yolo/yolov7/Licence-Plate-Detection-Recognition-Recording
+   ./easy_run.sh
+
+
+2. DETAILED TEST (Shows each step):
+
+   cd /home/jetson/yolo/yolov7/Licence-Plate-Detection-Recognition-Recording
+   ./test_run.sh
+
+
+3. TEST TENSORRT (Check if TensorRT works):
+
+   cd /home/jetson/yolo/yolov7/Licence-Plate-Detection-Recognition-Recording
+   ./test_tensorrt.sh
+
+
+4. SIMPLE ALPR (No gate tracking):
+
+   cd /home/jetson/yolo/yolov7/Licence-Plate-Detection-Recognition-Recording
+   ./run_simple.sh
+
+
+================================================================================
+📋 ALL AVAILABLE SCRIPTS:
+================================================================================
+
+Script Name          | What It Does                        | FPS Expected
+---------------------|-------------------------------------|-------------
+./easy_run.sh        | Simplest run (full system)          | 4-5 FPS
+./test_run.sh        | Detailed test with explanations     | 4-5 FPS
+./test_tensorrt.sh   | Test TensorRT engine                | Just a test
+./run_optimized.sh   | Optimized version                   | 5-7 FPS
+./run_simple.sh      | Simple ALPR (no gate)               | 6-8 FPS
+./run_camera.sh      | Use CSI camera instead of video     | 4-5 FPS
+./run_continuous.sh  | Continuous OCR mode                 | 2-3 FPS
+
+
+================================================================================
+⌨️ COMMON COMMANDS:
+================================================================================
+
+Navigate to project:
+    cd /home/jetson/yolo/yolov7/Licence-Plate-Detection-Recognition-Recording
+
+List files:
+    ls -la
+
+Run a script:
+    ./easy_run.sh
+
+Stop program:
+    Press: Ctrl + C
+
+View logs:
+    cat logs/parking_log_*.csv
+
+Check all logs:
+    ls logs/
+
+
+================================================================================
+🔧 MANUAL RUN (Step by step):
+================================================================================
+
+Step 1: Go to directory
+    cd /home/jetson/yolo/yolov7/Licence-Plate-Detection-Recognition-Recording
+
+Step 2: Activate virtual environment
+    source ../myenv/bin/activate
+
+Step 3: Set GPU workaround
+    export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libGLdispatch.so.0
+
+Step 4: Run the program
+    python3 inout_event.py
+
+Step 5: When done, deactivate
+    deactivate
+
+
+================================================================================
+🎯 WHAT YOU'LL SEE:
+================================================================================
+
+When you run the program, you'll see:
+
+1. Terminal output:
+   [INFO] Running with LD_PRELOAD=...
+   Loading YOLO model...
+   FPS: 4.3 | Detection Time: 1045ms
+
+2. OpenCV Window:
+   - Video playing
+   - Green boxes around license plates
+   - OCR text above plates (e.g., "世田谷310 70-50")
+   - FPS counter in corner
+
+3. CSV Log created:
+   logs/parking_log_YYYYMMDD.csv
+   Contains: timestamp, vehicle_type, direction, plate_number
+
+
+================================================================================
+📊 PERFORMANCE COMPARISON:
+================================================================================
+
+Current Setup:
+  - Model: ONNX (models/best.onnx)
+  - FPS: 4.3
+  - Detection: ~1000ms
+
+Potential Upgrade (TensorRT):
+  - Model: TensorRT (models/best.engine)
+  - FPS: 8-12 (3x faster!)
+  - Detection: ~300ms
+
+To test TensorRT, run:
+  ./test_tensorrt.sh
+
+
+================================================================================
+⚙️ CHANGE SETTINGS:
+================================================================================
+
+To change video source or mode:
+
+1. Edit the main file:
+   nano inout_event.py
+
+2. Find lines 32-44:
+
+   USE_CAMERA = False   # Change to True for CSI camera
+   USE_FILE = True      # Change to False if using camera
+   USE_YOUTUBE = False  # Change to True for YouTube stream
+
+   INPUT_VIDEO_PATH = "input_videos/Trim03.mp4"  # Change video file
+
+   DIRECTION_MODE = "IN_ONLY"  # Options: IN_ONLY, OUT_ONLY, BIDIRECTIONAL
+
+3. Save and exit:
+   Ctrl + X, then Y, then Enter
+
+
+================================================================================
+🐛 TROUBLESHOOTING:
+================================================================================
+
+Problem: "Permission denied"
+Solution:
+    chmod +x easy_run.sh
+
+Problem: "No such file or directory"
+Solution:
+    Check you're in the right directory:
+    pwd
+
+    Should show:
+    /home/jetson/yolo/yolov7/Licence-Plate-Detection-Recognition-Recording
+
+Problem: "Module not found"
+Solution:
+    Make sure virtual environment is activated:
+    source ../myenv/bin/activate
+
+Problem: Camera not found
+Solution:
+    Edit inout_event.py:
+    USE_CAMERA = False
+    USE_FILE = True
+
+
+================================================================================
+📞 QUICK HELP:
+================================================================================
+
+To see this file again:
+    cat HOW_TO_RUN.txt
+
+Or:
+    nano HOW_TO_RUN.txt
+
+
+================================================================================
+✅ RECOMMENDED FIRST TEST:
+================================================================================
+
+1. Open terminal (Ctrl + Alt + T)
+
+2. Run these commands:
+   cd /home/jetson/yolo/yolov7/Licence-Plate-Detection-Recognition-Recording
+   ./test_tensorrt.sh
+
+3. Then run:
+   ./easy_run.sh
+
+4. Watch the OpenCV window for detection results
+
+5. Stop with: Ctrl + C
+
+6. Check results:
+   cat logs/parking_log_*.csv
+
+
+================================================================================
+That's it! You're ready to run the system.
+Start with: ./easy_run.sh
+================================================================================

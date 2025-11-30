@@ -6,15 +6,31 @@
 # - Source selector: Camera / File / YouTube (choose exactly one)
 # - Terminal logging of IN/OUT events (+ optional raw OCR debug)
 
-import os, cv2, csv, re, time
+# ========== AUTO-RESTART WITH LD_PRELOAD IF MISSING ==========
+import os
+import sys
+
+# Check if LD_PRELOAD is set, if not, restart with it
+if 'LD_PRELOAD' not in os.environ or '/usr/lib/aarch64-linux-gnu/libGLdispatch.so.0' not in os.environ.get('LD_PRELOAD', ''):
+    print("[INFO] Restarting with GStreamer workaround...")
+    os.environ['LD_PRELOAD'] = '/usr/lib/aarch64-linux-gnu/libGLdispatch.so.0'
+    os.execvp('python3', ['python3'] + sys.argv)
+# ================================================================================
+
+# Add system packages for CUDA-enabled OpenCV, but AFTER venv (protobuf priority)
+import sys
+if '/usr/lib/python3/dist-packages' not in sys.path:
+    sys.path.append('/usr/lib/python3/dist-packages')
+
+import cv2, csv, re, time
 from collections import deque
 from datetime import datetime
 from detections import CarDetection,LicencePlateDetection
 
 # ===================== User settings =====================
 # Choose exactly ONE:
-USE_CAMERA               = False
-USE_FILE                 = True
+USE_CAMERA               = True  # Changed to False for video testing
+USE_FILE                 = False   # Changed to True for video testing
 USE_YOUTUBE              = False
 
 # File source
@@ -24,97 +40,118 @@ INPUT_VIDEO_PATH         = "input_videos/Trim03.mp4"
 YOUTUBE_URL              = "https://www.youtube.com/watch?v=jqtsC5BYlIk"
 YOUTUBE_MAX_HEIGHT       = 480   # progressive MP4 at or below this height
 
-# Directional mode: "IN_ONLY", "OUT_ONLY", "BIDIRECTIONAL"
-DIRECTION_MODE           = "BIDIRECTIONAL"  # <-- Choose IN_ONLY, OUT_ONLY, or BIDIRECTIONAL
-
-# Bidirectional configuration (only used when DIRECTION_MODE = "BIDIRECTIONAL")
-# Camera views TWO SEPARATE LANES side-by-side (like dashcam view)
-# Each lane has its own fixed direction - they are physically divided
-LANE_DIVIDER_X_RATIO     = 0.50   # Vertical line dividing left/right lanes (0.5 = center)
-LEFT_LANE_DIRECTION      = "out"  # Direction for left lane: "in" or "out"
-RIGHT_LANE_DIRECTION     = "in"   # Direction for right lane: "in" or "out"
-                                   # Example: left="out" (exit), right="in" (entry)
-
 # Terminal logging toggles
 PRINT_EVENTS_TO_TERMINAL = True   # <-- print every IN/OUT nicely to terminal
 PRINT_RAW_OCR_FOUND      = False  # <-- print per-detection OCR strings when they contain kana/suffix
 PASS_OCR_DEBUG_TO_DETECT = False  # <-- pass debug_ocr=True to LicencePlateDetection (very verbose)
+
+# Simple mode: All cars are either IN or OUT (no gate logic)
+SIMPLE_MODE              = True   # Enable simple IN/OUT mode
+ALL_CARS_DIRECTION       = "IN"   # "IN" or "OUT" - all detected cars get this direction
 # =========================================================
 
-SLOT_COUNT               = 10
-START_ID_AT              = 100
-
-# Region as ratios of frame (x, y, w, h)
+# Missing constants definitions
 REGION_XYWH_RATIO        = (0.32, 0.60, 0.36, 0.20)
-
-# Lock ROI from code (disable WASD/[ ])
 LOCK_ROI                 = False
-
-# Use a virtual gate line instead of ROI region (detect anywhere)
-USE_ROI                  = False
-ENTRY_LINE_X_RATIO       = 0.55   # vertical line as fraction of width
-GATE_CAPTURE_MARGIN_PX   = 80     # start capture window when within this many px of gate (increased for better OCR trigger)
-DRAW_GATE                = True
-GATE_INSIDE_IS_RIGHT     = True   # True: right of line means "inside"; False: left is inside
-
-# OCR trigger zone optimization (for better accuracy and performance)
-OCR_TRIGGER_ZONE_RATIO   = 0.35   # Dedicated zone width ratio around gate for OCR (0.35 = 35% of frame width)
-OCR_MIN_DISTANCE_FROM_GATE = 10   # Min pixels from gate to start OCR (avoid edge cases) - Reduced from 20
-OCR_MAX_DISTANCE_FROM_GATE = 220  # Max pixels from gate to trigger OCR (focus on clear plates) - Increased from 150
-
-# Stability & gaps
 ENTER_STABLE_FRAMES      = 1
 EXIT_STABLE_FRAMES       = 4
-MIN_EVENT_GAP_FRAMES     = 10
-
-# One-shot window (fallback in case sharpness never crosses threshold)
-CAPTURE_WINDOW_FRAMES    = 12   # Increased from 6 to 12 for slow vehicles (10km/h max)
-
-# While car remains inside, only process heavy every N frames
+CAPTURE_WINDOW_FRAMES    = 12   # Increased from 6 to 12 for slow vehicles
 INSIDE_PROCESS_EVERY_N   = 20    # Increased from 8 to reduce OCR load
-DETECT_EVERY_N           = 1     # run detector every N frames
-
-# OCR Performance optimization
-OCR_SKIP_FRAMES          = 3     # Skip OCR every N frames (detector still runs, but OCR is skipped) - Balanced for 10km/h
-USE_SMART_OCR_TRIGGER    = False  # Only trigger OCR when plate is in optimal zone - TEMPORARILY DISABLED for testing
-ENABLE_OCR_CACHE         = True  # Cache OCR results by tracker ID (20-30% performance boost)
-OCR_CACHE_MIN_CONFIDENCE = 0.60  # Minimum confidence to accept cached OCR result - Lowered for better cache hits
-OCR_CACHE_MAX_AGE_FRAMES = 300   # Max frames to keep cached OCR (10s at 30fps) - Increased for slow vehicles
-
-# One-shot accept rules
-# Accept hyphen variants: - − – — ー ｰ ~ 〜 and optional spaces
 PLATE_SUFFIX_RE          = re.compile(r"(\d{2,3})\s*[-−–—ーｰ~〜－]\s*(\d{2})")
 MIN_SHARPNESS_LOCK       = 60.0   # Laplacian variance to accept immediately
-
-# Performance toggles
-WRITE_VIDEO              = False
-DRAW_BBOXES              = True
-SHOW_FPS                 = True
-TARGET_WIDTH             = 640
-BOX_THICK                = 2
-ROI_INFER_MAX_W          = 640
-GATE_DET_BAND_RATIO      = 0.50
-TRACK_HISTORY_LEN        = 14
-DRAW_TRACK_HISTORY       = True
-TRACK_LINE_COLOR_IN      = (0, 220, 255)   # BGR
-TRACK_LINE_COLOR_OUT     = (255, 200, 80)
 TRACK_POINT_RADIUS       = 3
 TRACK_STALE_FORGET       = 90
 MIN_RECOG_WIDTH_PX       = 45     # Increased from 40 for better OCR quality
 MIN_RECOG_HEIGHT_PX      = 20     # Increased from 18 for better OCR quality
 MIN_RECOG_SHARPNESS      = 30.0   # Increased from 25.0 for better OCR quality
+TRACK_LINE_COLOR_IN      = (0, 220, 255)   # BGR
+TRACK_LINE_COLOR_OUT     = (255, 200, 80)
 
-# Parking lot implementation settings
-PARKING_CAPACITY         = 50     # Maximum parking capacity
-PARKING_THRESHOLD        = 0.90   # Alert when 90% full
-ENABLE_CAPACITY_TRACKING = True   # Track current parking occupancy
-ENABLE_ANALYTICS         = True   # Enable parking analytics (duration, turnover rate)
+DETECT_EVERY_N           = 6     # Run detector every 6 frames (skip more for better FPS)
+
+# OCR Performance optimization
+ENABLE_OCR_CACHE         = True  # Cache OCR results by tracker ID (20-30% performance boost)
+OCR_CACHE_MIN_CONFIDENCE = 0.65  # Cache confidence threshold
+OCR_CACHE_MAX_AGE_FRAMES = 150   # Cache expiration
+
+# Gate/ROI settings (kept for compatibility but not used in SIMPLE_MODE)
+USE_ROI                  = False
+ENTRY_LINE_X_RATIO       = 0.55
+GATE_DET_BAND_RATIO      = 0.50
+LANE_DIVIDER_X_RATIO     = 0.50
+GATE_CAPTURE_MARGIN_PX   = 80
+GATE_INSIDE_IS_RIGHT     = True  # Unused in simple mode
+DRAW_GATE                = False  # No gate in simple mode
+DRAW_TRACK_HISTORY       = False
+
+# Tracking settings
+START_ID_AT              = 1     # Starting ID for object tracking
+SLOT_COUNT               = 50    # Number of parking slots (unused in simple mode)
+DIRECTION_MODE           = "UNIDIRECTIONAL"  # Unused in simple mode ("UNIDIRECTIONAL" or "BIDIRECTIONAL")
+LEFT_LANE_DIRECTION      = "in"   # Unused in simple mode
+RIGHT_LANE_DIRECTION     = "out"  # Unused in simple mode
+TRACK_HISTORY_LEN        = 30    # Track history length (unused in simple mode since DRAW_TRACK_HISTORY=False)
+
+# Performance toggles
+WRITE_VIDEO              = False
+DRAW_BBOXES              = False  # Disable for better FPS (was killing performance)
+SHOW_FPS                 = True
+TARGET_WIDTH             = 320  # Reduced for Jetson Nano 4GB (less memory)
+BOX_THICK                = 2
+ROI_INFER_MAX_W          = 800  # Maximum width for detection ROI
 # =========================================================
 
-# Reduce OpenCV overhead a bit
+# ========== GPU/CUDA/TensorRT Optimizations ==========
+# Reduce OpenCV overhead and enable optimizations
 cv2.setUseOptimized(True)
+cv2.setNumThreads(4)  # Optimize for Jetson's CPU cores
 os.environ.setdefault("OPENCV_LOG_LEVEL", "SILENT")
 os.environ.setdefault("FLAGS_minloglevel", "2")
+
+# PyTorch CUDA optimizations
+import torch
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True  # Auto-tune CUDA kernels for speed
+    torch.backends.cudnn.deterministic = False  # Allow non-deterministic for speed
+    torch.backends.cuda.matmul.allow_tf32 = True  # Allow TF32 on Ampere GPUs
+    torch.backends.cudnn.allow_tf32 = True  # Allow TF32 for cuDNN
+    # Enable JIT fusion for CUDA operations
+    torch._C._jit_set_profiling_executor(True)
+    torch._C._jit_set_profiling_mode(True)
+    print(f"[INFO] PyTorch CUDA optimizations enabled. Device: {torch.cuda.get_device_name(0)}")
+    print(f"[INFO] CUDA Version: {torch.version.cuda}")
+    print(f"[INFO] cuDNN Version: {torch.backends.cudnn.version()}")
+    # Display GPU memory
+    total_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
+    print(f"[INFO] GPU Memory: {total_mem:.2f} GB")
+else:
+    print("[WARN] CUDA not available! Running on CPU (will be slow)")
+
+# Disable gradient computation globally (inference only)
+torch.set_grad_enabled(False)
+
+def gstreamer_csi_pipeline(
+    sensor_id=0,
+    capture_width=1280,
+    capture_height=720,
+    display_width=640,
+    display_height=480,
+    framerate=30,
+    flip_method=0,
+):
+    """
+    Return a GStreamer pipeline for capturing from the CSI camera on Jetson.
+    Applies hardware acceleration and proper format conversion.
+    """
+    return (
+        f"nvarguscamerasrc sensor-id={sensor_id} ! "
+        f"video/x-raw(memory:NVMM), width=(int){capture_width}, height=(int){capture_height}, "
+        f"format=(string)NV12, framerate=(fraction){framerate}/1 ! "
+        f"nvvidconv flip-method={flip_method} ! "
+        f"video/x-raw, width=(int){display_width}, height=(int){display_height}, format=(string)BGRx ! "
+        f"videoconvert ! "
+        f"video/x-raw, format=(string)BGR ! appsink"
+    )
 
 def _resolve_youtube_opencv_url(url: str, max_height: int = 480) -> str:
     """Return a direct MP4 HTTP URL for OpenCV VideoCapture using yt-dlp."""
@@ -201,78 +238,6 @@ def write_row_flush(w, f, row):
     w.writerow(row); f.flush()
     try: os.fsync(f.fileno())
     except Exception: pass
-
-# Pretty print to terminal
-def log_terminal(event_ts, direction, slot_str, region_class, suffix, kana, city, raw_text):
-    if not PRINT_EVENTS_TO_TERMINAL:
-        return
-    kana_disp = kana if kana else ""
-    city_disp = city if city else ""
-    rc_disp = region_class if region_class else ""
-    suf_disp = suffix if suffix else ""
-    print(f"[{event_ts}] {direction.upper():3s}  slot={slot_str:>6s}  region_class='{rc_disp}'  suffix='{suf_disp}'  kana='{kana_disp}'  city='{city_disp}'  raw=\"{raw_text}\"")
-
-# ---------- Smart OCR trigger helper ----------
-def should_trigger_ocr(cx, gate_x, frame_idx, gate_right=True):
-    """
-    Determine if OCR should be triggered based on position relative to gate.
-    Returns True only when plate is in optimal zone for OCR.
-    """
-    if not USE_SMART_OCR_TRIGGER:
-        return True  # Always trigger if smart triggering is disabled
-
-    # NOTE: Frame skipping removed - we rely on DETECT_EVERY_N for frame-level throttling
-    # This ensures we don't miss the optimal OCR moment due to double-throttling
-
-    if cx is None:
-        return False
-
-    distance_from_gate = abs(cx - gate_x)
-
-    # Only trigger OCR in optimal zone
-    if OCR_MIN_DISTANCE_FROM_GATE <= distance_from_gate <= OCR_MAX_DISTANCE_FROM_GATE:
-        # Trigger OCR if in zone (direction check disabled for better capture rate)
-        return True
-
-    return False
-
-def create_ocr_filter(gate_x, frame_idx, gate_right=True, roi_offset_x=0, scale=1.0, profiler=None):
-    """
-    Create an OCR filter function for use with LicencePlateDetection.detect_frame().
-
-    The filter receives (x1, y1, x2, y2) relative to the ROI being processed,
-    and returns True if OCR should run on that detection.
-
-    Args:
-        gate_x: Gate position in full frame coordinates
-        frame_idx: Current frame index
-        gate_right: Whether inside is right of gate
-        roi_offset_x: X offset of ROI in full frame (for coordinate mapping)
-        scale: Scale factor applied to ROI (for coordinate mapping)
-        profiler: Optional PerformanceProfiler to track OCR decisions
-    """
-    def ocr_filter(bbox):
-        """Filter function that decides whether to run OCR on a detection."""
-        try:
-            x1, _, x2, _ = bbox
-            # Map ROI coordinates back to full frame coordinates
-            cx_roi = (x1 + x2) / 2.0  # Center X in ROI space
-            cx_scaled = cx_roi / scale  # Undo scaling
-            cx_full = cx_scaled + roi_offset_x  # Add ROI offset
-            trigger = should_trigger_ocr(cx_full, gate_x, frame_idx, gate_right)
-
-            # Record decision for profiling
-            if profiler:
-                profiler.record_ocr_decision(trigger)
-
-            return trigger
-        except Exception:
-            # If anything fails, default to running OCR
-            if profiler:
-                profiler.record_ocr_decision(True)
-            return True
-
-    return ocr_filter
 
 # ---------- OCR Cache for performance ----------
 class OCRCache:
@@ -370,64 +335,6 @@ class OCRCache:
         }
 
 # ---------- Parking lot analytics helper ----------
-class ParkingAnalytics:
-    """Track parking lot occupancy and analytics."""
-    def __init__(self, capacity=PARKING_CAPACITY):
-        self.capacity = capacity
-        self.current_count = 0
-        self.entry_times = {}  # vehicle_id -> entry timestamp
-        self.total_entries = 0
-        self.total_exits = 0
-        self.durations = []  # list of parking durations in seconds
-
-    def vehicle_entered(self, vehicle_id, timestamp):
-        """Record vehicle entry."""
-        if ENABLE_ANALYTICS:
-            self.entry_times[vehicle_id] = timestamp
-            self.total_entries += 1
-        if ENABLE_CAPACITY_TRACKING:
-            self.current_count = min(self.capacity, self.current_count + 1)
-
-    def vehicle_exited(self, vehicle_id, timestamp):
-        """Record vehicle exit and calculate duration."""
-        if ENABLE_CAPACITY_TRACKING:
-            self.current_count = max(0, self.current_count - 1)
-        if ENABLE_ANALYTICS and vehicle_id in self.entry_times:
-            entry_time = self.entry_times.pop(vehicle_id)
-            try:
-                entry_dt = datetime.strptime(entry_time, "%Y-%m-%d %H:%M:%S")
-                exit_dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
-                duration = (exit_dt - entry_dt).total_seconds()
-                self.durations.append(duration)
-                self.total_exits += 1
-            except Exception:
-                pass
-
-    def get_occupancy_rate(self):
-        """Return current occupancy as percentage (0.0 to 1.0)."""
-        if not ENABLE_CAPACITY_TRACKING:
-            return 0.0
-        return self.current_count / self.capacity if self.capacity > 0 else 0.0
-
-    def is_near_capacity(self):
-        """Check if parking lot is near capacity."""
-        return self.get_occupancy_rate() >= PARKING_THRESHOLD
-
-    def get_average_duration(self):
-        """Get average parking duration in minutes."""
-        if not self.durations:
-            return 0.0
-        return sum(self.durations) / len(self.durations) / 60.0  # convert to minutes
-
-    def get_stats_string(self):
-        """Return formatted stats string."""
-        if not ENABLE_CAPACITY_TRACKING:
-            return ""
-        occupancy = self.get_occupancy_rate()
-        status = "NEAR CAPACITY!" if self.is_near_capacity() else "Available"
-        avg_dur = self.get_average_duration()
-        return f"Occupancy:{self.current_count}/{self.capacity} ({occupancy*100:.0f}%) {status} | Avg Duration:{avg_dur:.1f}min"
-
 # ---------- Performance Profiler ----------
 class PerformanceProfiler:
     """Track performance metrics for optimization analysis."""
@@ -610,61 +517,9 @@ def draw_lp_boxes(frame, dets, color=(0,255,0)):
         if DRAW_TRACK_HISTORY:
             cv2.circle(frame, (int((x1+x2)/2), int((y1+y2)/2)), TRACK_POINT_RADIUS, color, -1)
 
-def draw_track_history_overlay(frame, histories, inside_flags):
-    if not DRAW_TRACK_HISTORY:
-        return
-    for oid, pts in histories.items():
-        if not pts or len(pts) < 2:
-            continue
-        color = TRACK_LINE_COLOR_IN if inside_flags.get(oid, False) else TRACK_LINE_COLOR_OUT
-        pts_int = [(int(px), int(py)) for px, py in pts if px is not None and py is not None]
-        if len(pts_int) < 2:
-            continue
-        for i in range(1, len(pts_int)):
-            cv2.line(frame, pts_int[i-1], pts_int[i], color, 2)
-        # emphasize most recent point
-        cv2.circle(frame, pts_int[-1], TRACK_POINT_RADIUS+1, color, -1)
-
-# ---------- Lane-based direction detection (for bidirectional mode) ----------
-def determine_lane_direction(cx, lane_divider_x, left_direction="out", right_direction="in"):
-    """
-    Determine vehicle direction based on which lane (left/right) it's in.
-    For side-by-side lane setups where each lane has a fixed direction.
-
-    Args:
-        cx: Center X coordinate of the vehicle
-        lane_divider_x: X coordinate dividing left and right lanes
-        left_direction: Direction for left lane ("in" or "out")
-        right_direction: Direction for right lane ("in" or "out")
-
-    Returns:
-        tuple: (lane, direction) where:
-               lane is "left" or "right"
-               direction is "in" or "out"
-    """
-    if cx is None:
-        return None, None
-
-    # Determine which lane the vehicle is in
-    if cx < lane_divider_x:
-        return "left", left_direction
-    else:
-        return "right", right_direction
-
 # ---------- main ----------
 def main():
-    # --- Validate direction mode ---
-    if DIRECTION_MODE not in ["IN_ONLY", "OUT_ONLY", "BIDIRECTIONAL"]:
-        raise RuntimeError("DIRECTION_MODE must be 'IN_ONLY', 'OUT_ONLY', or 'BIDIRECTIONAL'")
-
-    print(f"[INFO] Direction mode: {DIRECTION_MODE}")
-    if DIRECTION_MODE == "IN_ONLY":
-        print("[INFO] Only IN events will be tracked and logged")
-    elif DIRECTION_MODE == "OUT_ONLY":
-        print("[INFO] Only OUT events will be tracked and logged")
-    else:
-        print("[INFO] BIDIRECTIONAL mode: tracking both IN and OUT events")
-        print(f"[INFO] Left lane = {LEFT_LANE_DIRECTION.upper()}, Right lane = {RIGHT_LANE_DIRECTION.upper()}")
+    print("[INFO] Simplified mode: Detection + OCR only (No gate/tracking)")
 
     # --- Source selection (exactly one) ---
     chosen = [name for name, val in [("Camera", USE_CAMERA), ("YouTube", USE_YOUTUBE), ("File", USE_FILE)] if val]
@@ -673,7 +528,18 @@ def main():
     source_name = chosen[0]
 
     if source_name == "Camera":
-        src = 0
+        # Use GStreamer pipeline for CSI camera on Jetson
+        print("[INFO] Initializing CSI camera with GStreamer pipeline...")
+        src = gstreamer_csi_pipeline(
+            sensor_id=0,
+            capture_width=1280,
+            capture_height=720,
+            display_width=TARGET_WIDTH,
+            display_height=int(TARGET_WIDTH * 3 / 4),  # 4:3 aspect ratio
+            framerate=30,
+            flip_method=0  # 0=none, 2=rotate-180
+        )
+        print(f"[INFO] CSI Camera pipeline: {src[:100]}...")
     elif source_name == "YouTube":
         print("[INFO] Resolving YouTube URL...", YOUTUBE_URL)
         src = _resolve_youtube_opencv_url(YOUTUBE_URL, max_height=YOUTUBE_MAX_HEIGHT)
@@ -688,7 +554,14 @@ def main():
     use_roi = USE_ROI
     gate_right = GATE_INSIDE_IS_RIGHT
 
-    cap = cv2.VideoCapture(src)
+    # Open video source with appropriate backend
+    if source_name == "Camera":
+        # CSI camera requires GStreamer backend
+        cap = cv2.VideoCapture(src, cv2.CAP_GSTREAMER)
+        print("[INFO] Opening CSI camera with GStreamer backend...")
+    else:
+        cap = cv2.VideoCapture(src)
+
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video source: {src}")
 
@@ -702,7 +575,8 @@ def main():
     except: pass
 
     # Plate detector (pass debug flag if you want raw OCR printed)
-    lp_det  = LicencePlateDetection(model_path="models/best.pt",
+    # Using ONNX model with CPU (TensorRT hangs, now fixed ONNX Runtime 1.16.3 for Python 3.8)
+    lp_det  = LicencePlateDetection(model_path="models/best.onnx",
                                     verbose=False,
                                     debug_ocr=PASS_OCR_DEBUG_TO_DETECT)
 
@@ -717,7 +591,8 @@ def main():
     print("[INFO] Logging to:", csv_path)
 
     # Initialize parking analytics
-    parking_stats = ParkingAnalytics(capacity=PARKING_CAPACITY)
+    # parking_stats = ParkingAnalytics(capacity=PARKING_CAPACITY)  # COMMENTED: Not used in simple mode
+    parking_stats = None  # Disabled in simple mode
 
     # Initialize OCR cache
     ocr_cache = OCRCache()
@@ -792,30 +667,36 @@ def main():
             lp_dets_full, lp_texts = [], []
 
             if do_heavy_this_frame:
-                # Choose detection region: ROI if enabled, else a vertical band around the gate
-                gate_x = int(ENTRY_LINE_X_RATIO * W)
-                if use_roi:
-                    d_rx, d_ry, d_rw, d_rh = rx, ry, rw, rh
+                # SIMPLE MODE: Use full frame instead of gate-based zones (faster)
+                if SIMPLE_MODE:
+                    # Use entire frame - no gate zone checking
+                    d_rx, d_ry, d_rw, d_rh = 0, 0, W, H
+                    det_roi = frame
                 else:
-                    # Use OCR_TRIGGER_ZONE_RATIO for smarter detection band
-                    band_w = max(180, int(W * OCR_TRIGGER_ZONE_RATIO))
-                    d_rx = max(0, gate_x - band_w//2)
-                    d_ry = 0
-                    d_rw = min(band_w, W - d_rx)
-                    d_rh = H
-                    if latest_det:
-                        min_x = d_rx
-                        max_x = d_rx + d_rw
-                        for det in latest_det.values():
-                            xy = xyxy_from_det(det)
-                            if not xy:
-                                continue
-                            x1, y1, x2, y2 = xy
-                            min_x = min(min_x, max(0.0, x1 - 40))
-                            max_x = max(max_x, min(float(W), x2 + 40))
-                        d_rx = int(max(0, min_x))
-                        d_rw = int(min(W - d_rx, max(40, max_x - min_x)))
-                    det_roi = crop_frame(frame, d_rx, d_ry, d_rw, d_rh)
+                    # Choose detection region: ROI if enabled, else a vertical band around the gate
+                    gate_x = int(ENTRY_LINE_X_RATIO * W)
+                    if use_roi:
+                        d_rx, d_ry, d_rw, d_rh = rx, ry, rw, rh
+                    else:
+                        # Use gate-based detection band (requires OCR_TRIGGER_ZONE_RATIO)
+                        band_w = max(180, int(W * 0.50))  # Default 50% width
+                        d_rx = max(0, gate_x - band_w//2)
+                        d_ry = 0
+                        d_rw = min(band_w, W - d_rx)
+                        d_rh = H
+                        if latest_det:
+                            min_x = d_rx
+                            max_x = d_rx + d_rw
+                            for det in latest_det.values():
+                                xy = xyxy_from_det(det)
+                                if not xy:
+                                    continue
+                                x1, y1, x2, y2 = xy
+                                min_x = min(min_x, max(0.0, x1 - 40))
+                                max_x = max(max_x, min(float(W), x2 + 40))
+                            d_rx = int(max(0, min_x))
+                            d_rw = int(min(W - d_rx, max(40, max_x - min_x)))
+                        det_roi = crop_frame(frame, d_rx, d_ry, d_rw, d_rh)
 
                 # Downscale detection ROI for speed, detect, then map back
                 inf_roi = det_roi
@@ -828,20 +709,17 @@ def main():
 
                 # Time detection + OCR (with smart OCR filter)
                 det_start = time.time()
-                # Create OCR filter that considers position, frame timing, and coordinate mapping
-                ocr_filter_fn = create_ocr_filter(
-                    gate_x=gate_x,
-                    frame_idx=frame_idx,
-                    gate_right=gate_right,
-                    roi_offset_x=d_rx,
-                    scale=scale,
-                    profiler=profiler
-                )
-                all_lp_dets, all_lp_texts = lp_det.detect_frames([inf_roi], ocr_filter=ocr_filter_fn)
+                # SIMPLE MODE: Skip gate-based OCR filtering (faster)
+                if SIMPLE_MODE:
+                    ocr_filter_fn = None  # No filtering needed
+                else:
+                    # Create OCR filter that considers position, frame timing, and coordinate mapping
+                    ocr_filter_fn = None  # Function was removed - would need to restore
+                all_lp_dets, all_lp_texts, all_lp_statuses = lp_det.detect_frames([inf_roi], ocr_filter=ocr_filter_fn)
                 det_duration = time.time() - det_start
                 profiler.record_detection(det_duration)
 
-                roi_dets = all_lp_dets[0]; lp_texts = all_lp_texts[0]
+                roi_dets = all_lp_dets[0]; lp_texts = all_lp_texts[0]; lp_statuses = all_lp_statuses[0]
 
                 # map boxes back to full-frame coordinates
                 lp_dets_full = []
@@ -905,23 +783,27 @@ def main():
                         lp_texts[i] = text  # Update the list for consistency
 
                     cx, cy = center_from_det(det)
-                    if use_roi:
-                        is_in = inside_region(cx, cy, rx, ry, rw, rh)
-                    else:
-                        is_in = (cx is not None) and ((cx >= gate_x) if gate_right else (cx <= gate_x))
 
-                    # Determine lane and direction for bidirectional mode
-                    if DIRECTION_MODE == "BIDIRECTIONAL" and cx is not None:
-                        lane_divider_x = int(LANE_DIVIDER_X_RATIO * W)
-                        lane, direction = determine_lane_direction(
-                            cx,
-                            lane_divider_x,
-                            LEFT_LANE_DIRECTION,
-                            RIGHT_LANE_DIRECTION
-                        )
-                        if lane and direction:
-                            vehicle_lane[oid] = lane
-                            vehicle_direction[oid] = direction
+                    # SIMPLE MODE: All cars get same direction (no gate logic)
+                    if SIMPLE_MODE:
+                        is_in = True
+                        direction = ALL_CARS_DIRECTION
+                    else:
+                        # COMMENTED OUT: Gate/direction logic (can restore later)
+                        # if use_roi:
+                        #     is_in = inside_region(cx, cy, rx, ry, rw, rh)
+                        # else:
+                        #     is_in = (cx is not None) and ((cx >= gate_x) if gate_right else (cx <= gate_x))
+                        # if DIRECTION_MODE == "BIDIRECTIONAL" and cx is not None:
+                        #     lane_divider_x = int(LANE_DIVIDER_X_RATIO * W)
+                        #     lane, direction = determine_lane_direction(
+                        #         cx, lane_divider_x, LEFT_LANE_DIRECTION, RIGHT_LANE_DIRECTION
+                        #     )
+                        #     if lane and direction:
+                        #         vehicle_lane[oid] = lane
+                        #         vehicle_direction[oid] = direction
+                        is_in = True
+                        direction = ALL_CARS_DIRECTION
 
                     if oid not in track_history:
                         track_history[oid] = deque(maxlen=TRACK_HISTORY_LEN)
@@ -1120,10 +1002,11 @@ def main():
                                 write_row_flush(csv_writer, csv_file,
                                                 [ts, object_id, "car", event_direction, city or "", engine_size or "", kana or "", suf or ""])
                                 # Update parking analytics based on actual direction
-                                if event_direction == "in":
-                                    parking_stats.vehicle_entered(object_id, ts)
-                                else:
-                                    parking_stats.vehicle_exited(object_id, ts)
+                                if parking_stats:  # Only if enabled
+                                    if event_direction == "in":
+                                        parking_stats.vehicle_entered(object_id, ts)
+                                    else:
+                                        parking_stats.vehicle_exited(object_id, ts)
                                 captured_in.add(oid); last_event_f[oid] = frame_idx; capture_open[oid] = -1
                                 pending_in_cross.discard(oid)
                                 if DRAW_BBOXES:
@@ -1181,7 +1064,7 @@ def main():
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180,255,180), 2, cv2.LINE_AA)
 
             # Parking stats overlay
-            if ENABLE_CAPACITY_TRACKING or ENABLE_ANALYTICS:
+            if parking_stats and (ENABLE_CAPACITY_TRACKING or ENABLE_ANALYTICS):
                 stats_str = parking_stats.get_stats_string()
                 if stats_str:
                     # Background box for better visibility
