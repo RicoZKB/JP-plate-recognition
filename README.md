@@ -56,28 +56,60 @@ The system can detect and read Japanese license plates in real-time from camera 
 
 ## Software Requirements
 
-### Pre-installed Software (Already Configured)
+These requirements describe how to prepare a Jetson Nano for this project. Cloning this repository does not install the software or recreate the Python environment from the original SD card.
 
-The following software is already installed and configured on your system:
+### Recommended SD Card Image
 
-- **Operating System**: Ubuntu 18.04 (Jetson)
-- **Python**: 3.6 or higher
-- **CUDA**: 10.2
-- **TensorRT**: 8.x
-- **OpenCV**: 4.x with GStreamer support
-- **PaddleOCR**: Latest version
-- **YOLOv7**: Custom trained model
+Use the **full Qengineering Jetson Nano Ubuntu 20.04 image**:
+
+- [Image downloads, installation instructions and included software](https://github.com/Qengineering/Jetson-Nano-Ubuntu-20-image)
+- [Qengineering Ubuntu 20.04 setup guide](https://qengineering.eu/install-ubuntu-20.04-on-jetson-nano.html)
+
+Download and flash the SD card image by following the linked instructions, then boot the Jetson Nano. Cloning the image repository alone does not install the operating system. Select the full image with the AI frameworks; the separate bare image requires additional setup.
+
+This is a community Ubuntu 20.04 image using the Jetson Nano's JetPack software stack.
+
+### Software Included with the Full Image
+
+Most of the base software is already installed **when using the full Qengineering image**. The upstream documentation lists the following reference versions; check the image release you download.
+
+| Component | Reference environment |
+|-----------|-----------------------|
+| Operating system | Ubuntu 20.04 |
+| Python | Python 3.8 |
+| CUDA | 10.2 |
+| TensorRT | 8.0.1.6 |
+| OpenCV | 4.8.0 |
+| PyTorch (`torch`) | 1.13.0 |
+| TorchVision (`torchvision`) | 0.14.0 |
+
+These are image versions, not a complete set of tested project dependency pins. If using a different SD card image, install and configure an equivalent compatible environment separately.
+
+### Additional Project Setup
+
+Check or install the following before running the application:
+
+- **Ultralytics (`ultralytics`)**: required by the detector's `from ultralytics import YOLO` import.
+- **PaddlePaddle and PaddleOCR**: install builds compatible with Jetson Nano ARM64, Python and CUDA. The current detector requests GPU OCR, so the PaddlePaddle build must support that configuration. These packages are not listed among the full image's pre-installed software.
+- **NumPy and pandas**: ensure compatible versions are available in the Python environment.
+- **Model files**: provide the project's trained detection model and Japanese OCR models. The operating system image does not supply the project's custom models.
+- **Camera support**: confirm that OpenCV has GStreamer support and that the IMX477 camera driver and NVIDIA Argus camera service work on the installed image.
+
+Use package versions compatible with this repository's code and the image's older CUDA/Python stack. Installing the latest releases of every package is not a substitute for checking compatibility. Keep the image's Jetson-compatible OpenCV, PyTorch and TorchVision builds when resolving dependencies.
 
 ### Python Environment
 
-A virtual environment is located at `../myenv` with all required packages:
-- torch
-- torchvision
-- opencv-python
-- paddlepaddle
-- paddleocr
-- numpy
-- pandas
+The startup script `run_fr01.sh` expects a virtual environment at `../myenv`, relative to the project directory. This environment was present on the original SD card; it must be created or restored on a fresh installation.
+
+From the project directory, create it if it does not already exist:
+
+```bash
+sudo apt-get install python3-venv
+python3 -m venv --system-site-packages ../myenv
+source ../myenv/bin/activate
+```
+
+The `--system-site-packages` option makes the image's system-installed Python packages available to the environment. Install any missing project dependencies into this environment using compatible builds, then confirm that the required imports, GPU inference and camera capture work before starting normal operation. Creating the environment alone does not install the additional packages or models.
 
 ---
 
